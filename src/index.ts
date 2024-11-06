@@ -5,9 +5,18 @@ import { development, production } from './core';
 import { ObjectId } from 'mongodb';
 import OpenAI from 'openai';
 import { db, connectToMongo } from './db';
-import { ChatCompletionMessageParam } from 'openai/resources';
+import { ChatCompletionContentPart, ChatCompletionMessageParam } from 'openai/resources';
 import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
+import { BaseDocumentLoader } from "langchain/dist/document_loaders/base"
+import { TextLoader } from "langchain/document_loaders/fs/text"
+import { PDFLoader } from "langchain/document_loaders/fs/pdf"
+import { DocxLoader } from "langchain/document_loaders/fs/docx"
+import { CSVLoader } from "langchain/document_loaders/fs/csv"
+import { JSONLoader } from "langchain/document_loaders/fs/json"
+import * as fs from 'fs';
+import * as path from 'path';
+import axios from 'axios';
 
 interface UserProfile {
   _id?: ObjectId;
@@ -47,8 +56,7 @@ const ENVIRONMENT = process.env.NODE_ENV || '';
 const bot = new Telegraf(BOT_TOKEN);
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENROUTER_API_KEY,
-  baseURL: 'https://openrouter.ai/api/v1',
+  apiKey: process.env.OPENAI_API_KEY,
   defaultHeaders: {
     'X-Title': 'Telegram GPT Bot'
   }
@@ -83,7 +91,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-async function sendToOpenRouterStream(userId: number, prompt: string, ctx: Context): Promise<void> {
+async function sendToOpenRouterStream(userId: number, prompt: string | Array<ChatCompletionContentPart>, ctx: Context): Promise<void> {
   try {
     // Получаем профиль пользователя для проверки подписки
     const user = await getUserProfile(userId);
@@ -154,7 +162,7 @@ async function sendToOpenRouterStream(userId: number, prompt: string, ctx: Conte
       totalResponseTokens = estimateTokens(fullResponse);
     }
 
-    await updateTokenUsage(userId, estimateTokens(prompt), totalResponseTokens);
+    await updateTokenUsage(userId, estimateTokens(prompt as string), totalResponseTokens);
   } catch (error) {
     console.error('Error calling OpenRouter:', error);
     await ctx.reply('Sorry, there was an error processing your request.');
@@ -250,7 +258,7 @@ async function updateUserRequests(userId: number): Promise<boolean> {
   const resetTime = new Date(user.lastResetDate.getTime() + 24 * 60 * 60 * 1000); // lastResetDate + 24 часа
   
   if (now >= resetTime) {
-    // Прошло 24 часа с момента последнего сброса
+    // Прошло 24 час�� с момента последнего сброса
     await users.updateOne(
       { userId }, 
       { 
@@ -374,7 +382,7 @@ bot.command('start', async (ctx) => {
 1. Бесплатный: ${FREE_DAILY_LIMIT} генераций в день
 2. Премиум: ${PREMIUM_DAILY_LIMIT} генераций в день
 
-Цена премиум подписки: ${PREMIUM_PRICE} ⭐
+Цена премиум одписки: ${PREMIUM_PRICE} ⭐
 
 Используйте команду /pay для покупки премиум пописки.
   `;
@@ -580,3 +588,150 @@ export const startVercel = async (req: VercelRequest, res: VercelResponse) => {
 };
 //dev mode
 ENVIRONMENT !== 'production' && development(bot);
+
+// Добавляем обработчик для документов и фото
+bot.on(message('document'), async (ctx) => {
+  const userId = ctx.from.id;
+  const username = ctx.from.username;
+  const document = ctx.message.document;
+  const caption = ctx.message.caption || '';
+
+  try {
+    await checkAndUpdateSubscriptionStatus(userId, ctx);
+    const canMakeRequest = await updateUserRequests(userId);
+    if (!canMakeRequest) {
+      const user = await getUserProfile(userId, username);
+      if (user.subscription === 'free') {
+        await ctx.reply('Вы достигли дневного лимита бесплатных запросов. Хотите купить премиум подписку?', 
+          Markup.inlineKeyboard([Markup.button.callback('Купить премиум', 'buy_premium')]));
+      } else {
+        await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
+      }
+      return;
+    }
+
+    // Получаем информацию о файле
+    const file = await ctx.telegram.getFile(document.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+
+    // Сохраняем в базу информацию о файле и caption
+    const fileInfo = `[Файл: ${document.file_name} (${document.mime_type})]`;
+    const messageForHistory = caption ? `${caption}` : fileInfo;
+    await saveChatMessage(userId, 'user', messageForHistory);
+
+    // Загружаем и обрабатываем содержимое файла
+    const fileContent = await processFileContent(fileUrl, document.file_name as string);
+
+    // Формируем промпт с информацией о файле и его содержимым
+    const prompt = caption 
+      ? `User Prompt: ${caption}\n\nFile Content: ${fileContent}`
+      : `Please analyze this file: ${fileContent}`;
+
+    // Отправляем в модель
+    const response = await sendToOpenRouterStream(userId, prompt, ctx);
+  } catch (error) {
+    console.error('Error processing file:', error);
+    await ctx.reply('Извините, произошла ошибка при обработке вашего файла.');
+  }
+});
+
+bot.on(message('photo'), async (ctx) => {
+  const userId = ctx.from.id;
+  const username = ctx.from.username;
+  const photos = ctx.message.photo;
+  const caption = ctx.message.caption || '';
+
+  try {
+    await checkAndUpdateSubscriptionStatus(userId, ctx);
+    const canMakeRequest = await updateUserRequests(userId);
+    if (!canMakeRequest) {
+      const user = await getUserProfile(userId, username);
+      if (user.subscription === 'free') {
+        await ctx.reply('Вы достигли дневного лимита бесплатных запросов. Хотите купить премиум подписку?', 
+          Markup.inlineKeyboard([Markup.button.callback('Купить премиум', 'buy_premium')]));
+      } else {
+        await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
+      }
+      return;
+    }
+
+    // Берем фото максимального размера
+    const photo = photos[photos.length - 1];
+    const file = await ctx.telegram.getFile(photo.file_id);
+    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+
+    // Сохраняем в базу информацию о фото и caption
+    const messageForHistory = caption ? caption: "было отправлено фото";
+    await saveChatMessage(userId, 'user', messageForHistory);
+
+    console.log(fileUrl);
+
+    // Формируем промпт
+    const prompt = [
+      { type: "text", text: caption },
+      {
+        type: "image_url",
+        image_url: {
+          "url": fileUrl,
+        },
+      },
+    ] as ChatCompletionContentPart[];
+
+    // Отправляем в модель
+    await sendToOpenRouterStream(userId, prompt, ctx);
+  } catch (error) {
+    console.error('Error processing photo:', error);
+    await ctx.reply('Извините, произошла ошибка при обработке вашей фотографии.');
+  }
+});
+
+// Добавляем функцию для получения loader'а по расширению файла
+function getDocumentLoader(filePath: string): BaseDocumentLoader {
+  const extension = filePath.split(".").pop();
+
+  switch (extension?.toLowerCase()) {
+    case "txt":
+      return new TextLoader(filePath);
+    case "pdf":
+      return new PDFLoader(filePath, {
+        parsedItemSeparator: "",
+      });
+    case "docx":
+      return new DocxLoader(filePath);
+    case "csv":
+      return new CSVLoader(filePath);
+    case "json":
+      return new JSONLoader(filePath);
+    default:
+      return new TextLoader(filePath);
+  }
+}
+
+// Добавляем функцию для загрузки и обработки файла
+async function processFileContent(fileUrl: string, fileName: string): Promise<string> {
+  try {
+    // Создаем временную директорию, если её нет
+    const tmpDir = path.join(process.cwd(), 'tmp');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir);
+    }
+
+    // Загружаем файл
+    const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
+    const filePath = path.join(tmpDir, fileName);
+    fs.writeFileSync(filePath, response.data);
+
+    // Получаем loader и загружаем содержимое
+    const loader = getDocumentLoader(filePath);
+    const docs = await loader.load();
+    
+    // Удаляем временный файл
+    fs.unlinkSync(filePath);
+
+    // Объединяем содержимое всех документов
+    return docs.map((doc: any) => doc.pageContent).join('\n');
+  } catch (error) {
+    console.error('Error processing file:', error);
+    throw new Error('Failed to process file content');
+  }
+}
