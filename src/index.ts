@@ -322,6 +322,48 @@ async function createPayment(paymentData: any): Promise<Payment> {
   return payment;
 }
 
+// Добавляем новую функцию для проверки премиум статуса
+async function checkPremiumStatus(userId: number, ctx: Context): Promise<boolean> {
+  const user = await getUserProfile(userId);
+  
+  if (user.subscription === 'premium') {
+    const expiryDate = user.subscriptionExpiryDate;
+    await ctx.reply(
+      'У вас уже есть активная премиум подписка!' +
+      (expiryDate ? `\nСрок действия: до ${expiryDate.toLocaleString('ru-RU', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        timeZone: 'Europe/Moscow'
+      })}` : '')
+    );
+    return true;
+  }
+  return false;
+}
+
+// Добавляем функцию для отправки инвойса
+async function sendSubscriptionInvoice(userId: number, ctx: Context): Promise<void> {
+  const invoice = await createInvoice(userId);
+  
+  try {
+    await ctx.telegram.sendInvoice(ctx.chat!.id, {
+      title: invoice.title,
+      description: invoice.description,
+      payload: invoice.payload,
+      provider_token: "",
+      currency: 'XTR',
+      prices: [{ 
+        label: 'Премиум подписка', 
+        amount: PREMIUM_PRICE
+      }],
+    });
+  } catch (error) {
+    console.error('Error sending invoice:', error);
+    await ctx.reply('Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.');
+  }
+}
+
 bot.command('start', async (ctx) => {
   const username = ctx.from.username;
   await getUserProfile(ctx.from.id, username);
@@ -376,23 +418,9 @@ ${subscriptionInfo}
 
 bot.command('pay', async (ctx) => {
   const userId = ctx.from!.id;
-  const invoice = await createInvoice(userId);
-  
-  try {
-    await ctx.telegram.sendInvoice(ctx.chat!.id, {
-      title: invoice.title,
-      description: invoice.description,
-      payload: invoice.payload,
-      provider_token: "",
-      currency: 'XTR',
-      prices: [{ 
-        label: 'Премиум подписка', 
-        amount: PREMIUM_PRICE
-      }],
-    });
-  } catch (error) {
-    console.error('Error sending invoice:', error);
-    await ctx.reply('Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.');
+  const hasPremium = await checkPremiumStatus(userId, ctx);
+  if (!hasPremium) {
+    await sendSubscriptionInvoice(userId, ctx);
   }
 });
 
@@ -530,23 +558,9 @@ bot.on('successful_payment', async (ctx) => {
 bot.action('buy_premium', async (ctx) => {
   await ctx.answerCbQuery();
   const userId = ctx.from!.id;
-  const invoice = await createInvoice(userId);
-  
-  try {
-    await ctx.telegram.sendInvoice(ctx.chat!.id, {
-      title: invoice.title,
-      description: invoice.description,
-      payload: invoice.payload,
-      provider_token: "",
-      currency: 'XTR',
-      prices: [{ 
-        label: 'Премиум подписка', 
-        amount: PREMIUM_PRICE
-      }],
-    });
-  } catch (error) {
-    console.error('Error sending invoice:', error);
-    await ctx.reply('Произошла ошибка при создании счета. Пожалуйста, попробуйте позже.');
+  const hasPremium = await checkPremiumStatus(userId, ctx);
+  if (!hasPremium) {
+    await sendSubscriptionInvoice(userId, ctx);
   }
 });
 
