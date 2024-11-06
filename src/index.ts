@@ -8,14 +8,6 @@ import { db, connectToMongo } from './db';
 import { ChatCompletionContentPart, ChatCompletionMessageParam } from 'openai/resources';
 import { randomUUID } from 'crypto';
 import { message } from 'telegraf/filters';
-import { BaseDocumentLoader } from "langchain/dist/document_loaders/base"
-import { TextLoader } from "langchain/document_loaders/fs/text"
-import { PDFLoader } from "langchain/document_loaders/fs/pdf"
-import { DocxLoader } from "langchain/document_loaders/fs/docx"
-import { CSVLoader } from "langchain/document_loaders/fs/csv"
-import { JSONLoader } from "langchain/document_loaders/fs/json"
-import * as fs from 'fs';
-import * as path from 'path';
 import axios from 'axios';
 
 interface UserProfile {
@@ -68,6 +60,9 @@ const STREAM_CHUNK_SIZE = 100;
 const FREE_DAILY_LIMIT = 10;
 const PREMIUM_DAILY_LIMIT = 100;
 const PREMIUM_PRICE = 1; // Цена премиум подписки в звездах
+
+// Добавляем константу для максимального размера файла (10 МБ в байтах)
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 async function getChatHistory(userId: number): Promise<Array<{ role: 'system' | 'user' | 'assistant', content: string }>> {
   const chats = db.collection('chats');
@@ -259,7 +254,7 @@ async function updateUserRequests(userId: number): Promise<boolean> {
   const resetTime = new Date(user.lastResetDate.getTime() + 24 * 60 * 60 * 1000); // lastResetDate + 24 часа
   
   if (now >= resetTime) {
-    // Прошло 24 час�� с момента последнего сброса
+    // Прошло 24 час с момента последнего сброса
     await users.updateOne(
       { userId }, 
       { 
@@ -380,12 +375,18 @@ bot.command('start', async (ctx) => {
 Добро пожаловать в AI бота!
 
 Наши тарифы:
-1. Бесплатный: ${FREE_DAILY_LIMIT} генераций в день
-2. Премиум: ${PREMIUM_DAILY_LIMIT} генераций в день
+1. Бесплатный: ${FREE_DAILY_LIMIT} текстовых запросов в день
+2. Премиум: ${PREMIUM_DAILY_LIMIT} запросов в день
 
-Цена премиум одписки: ${PREMIUM_PRICE} ⭐
+Премиум возможности:
+• Анализ изображений и фотографий
+• Анализ документов (PDF, DOCX, TXT, CSV, JSON)
+• Больше токенов на ответ
+• Доступ к более мощной модели
 
-Используйте команду /pay для покупки премиум пописки.
+Цена премиум подписки: ${PREMIUM_PRICE} ⭐
+
+Используйте команду /pay для покупки премиум подписки.
   `;
 
   const keyboard = Markup.keyboard([
@@ -594,20 +595,35 @@ ENVIRONMENT !== 'production' && development(bot);
 bot.on(message('document'), async (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username;
+  const user = await getUserProfile(userId, username);
+
+  // Ранняя проверка на премиум подписку
+  if (user.subscription !== 'premium') {
+    await ctx.reply(
+      'Анализ файлов доступен только для премиум пользователей.\n' +
+      'Хотите получить доступ к этой функции?',
+      Markup.inlineKeyboard([
+        Markup.button.callback('Купить премиум', 'buy_premium')
+      ])
+    );
+    return;
+  }
+
   const document = ctx.message.document;
+  
+  // Проверка размера файла
+  if (document.file_size && document.file_size > MAX_FILE_SIZE) {
+    await ctx.reply('Извините, но размер файла превышает максимально допустимый (10 МБ).');
+    return;
+  }
+
   const caption = ctx.message.caption || '';
 
   try {
     await checkAndUpdateSubscriptionStatus(userId, ctx);
     const canMakeRequest = await updateUserRequests(userId);
     if (!canMakeRequest) {
-      const user = await getUserProfile(userId, username);
-      if (user.subscription === 'free') {
-        await ctx.reply('Вы достигли дневного лимита бесплатных запросов. Хотите купить премиум подписку?', 
-          Markup.inlineKeyboard([Markup.button.callback('Купить премиум', 'buy_premium')]));
-      } else {
-        await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
-      }
+      await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
       return;
     }
 
@@ -639,20 +655,36 @@ bot.on(message('document'), async (ctx) => {
 bot.on(message('photo'), async (ctx) => {
   const userId = ctx.from.id;
   const username = ctx.from.username;
+  const user = await getUserProfile(userId, username);
+
+  // Ранняя проверка на премиум подписку
+  if (user.subscription !== 'premium') {
+    await ctx.reply(
+      'Анализ изображений доступен только для премиум пользователей.\n' +
+      'Хотите получить доступ к этой функции?',
+      Markup.inlineKeyboard([
+        Markup.button.callback('Купить премиум', 'buy_premium')
+      ])
+    );
+    return;
+  }
+
   const photos = ctx.message.photo;
+  const largestPhoto = photos[photos.length - 1];
+  
+  // Проверка размера фото
+  if (largestPhoto.file_size && largestPhoto.file_size > MAX_FILE_SIZE) {
+    await ctx.reply('Извините, но размер изображения превышает максимально допустимый (10 МБ).');
+    return;
+  }
+
   const caption = ctx.message.caption || '';
 
   try {
     await checkAndUpdateSubscriptionStatus(userId, ctx);
     const canMakeRequest = await updateUserRequests(userId);
     if (!canMakeRequest) {
-      const user = await getUserProfile(userId, username);
-      if (user.subscription === 'free') {
-        await ctx.reply('Вы достигли дневного лимита бесплатных запросов. Хотите купить премиум подписку?', 
-          Markup.inlineKeyboard([Markup.button.callback('Купить премиум', 'buy_premium')]));
-      } else {
-        await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
-      }
+      await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
       return;
     }
 
@@ -686,51 +718,42 @@ bot.on(message('photo'), async (ctx) => {
   }
 });
 
-// Добавляем функцию для получения loader'а по расширению файла
-function getDocumentLoader(filePath: string): BaseDocumentLoader {
-  const extension = filePath.split(".").pop();
-
-  switch (extension?.toLowerCase()) {
-    case "txt":
-      return new TextLoader(filePath);
-    case "pdf":
-      return new PDFLoader(filePath, {
-        parsedItemSeparator: "",
-      });
-    case "docx":
-      return new DocxLoader(filePath);
-    case "csv":
-      return new CSVLoader(filePath);
-    case "json":
-      return new JSONLoader(filePath);
-    default:
-      return new TextLoader(filePath);
-  }
-}
-
 // Добавляем функцию для загрузки и обработки файла
 async function processFileContent(fileUrl: string, fileName: string): Promise<string> {
   try {
-    // Создаем временную директорию, если её нет
-    const tmpDir = path.join(process.cwd(), 'tmp');
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir);
-    }
-
-    // Загружаем файл
+    // Загружаем файл в память
     const response = await axios.get(fileUrl, { responseType: 'arraybuffer' });
-    const filePath = path.join(tmpDir, fileName);
-    fs.writeFileSync(filePath, response.data);
-
-    // Получаем loader и загружаем содержимое
-    const loader = getDocumentLoader(filePath);
-    const docs = await loader.load();
+    const buffer = Buffer.from(response.data);
     
-    // Удаляем временный файл
-    fs.unlinkSync(filePath);
-
-    // Объединяем содержимое всех документов
-    return docs.map((doc: any) => doc.pageContent).join('\n');
+    // Определяем тип файла по расширению
+    const extension = fileName.split('.').pop()?.toLowerCase();
+    
+    // Обрабатываем содержимое в зависимости от типа файла
+    switch (extension) {
+      case 'txt':
+        return buffer.toString('utf-8');
+        
+      case 'json':
+        return JSON.stringify(JSON.parse(buffer.toString('utf-8')), null, 2);
+        
+      case 'csv':
+        return buffer.toString('utf-8');
+        
+      case 'pdf':
+        // Для PDF можно использовать pdf-parse
+        const pdfParse = require('pdf-parse');
+        const data = await pdfParse(buffer);
+        return data.text;
+        
+      case 'docx':
+        // Для DOCX можно использовать mammoth
+        const mammoth = require('mammoth');
+        const result = await mammoth.extractRawText({ buffer });
+        return result.value;
+        
+      default:
+        return buffer.toString('utf-8');
+    }
   } catch (error) {
     console.error('Error processing file:', error);
     throw new Error('Failed to process file content');
