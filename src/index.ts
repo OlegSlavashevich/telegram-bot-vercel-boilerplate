@@ -12,6 +12,7 @@ import { message } from 'telegraf/filters';
 interface UserProfile {
   _id?: ObjectId;
   userId: number;
+  username?: string;
   subscription: 'free' | 'premium';
   dailyRequests: number;
   lastResetDate: Date;
@@ -209,14 +210,16 @@ async function checkAndUpdateSubscriptionStatus(userId: number, ctx?: Context): 
   }
 }
 
-async function getUserProfile(userId: number): Promise<UserProfile> {
+async function getUserProfile(userId: number, username?: string): Promise<UserProfile> {
   await checkAndUpdateSubscriptionStatus(userId);
   
   const users = db.collection<UserProfile>('users');
   let user = await users.findOne({ userId });
+  
   if (!user) {
     const newUser: UserProfile = {
       userId,
+      username,
       subscription: 'free',
       dailyRequests: 0,
       lastResetDate: new Date(),
@@ -225,6 +228,15 @@ async function getUserProfile(userId: number): Promise<UserProfile> {
     newUser._id = result.insertedId;
     return newUser;
   }
+  
+  if (username && username !== user.username) {
+    await users.updateOne(
+      { userId },
+      { $set: { username } }
+    );
+    user.username = username;
+  }
+  
   return user;
 }
 
@@ -234,9 +246,20 @@ async function updateUserRequests(userId: number): Promise<boolean> {
   const users = db.collection<UserProfile>('users');
   const user = await getUserProfile(userId);
   
-  const today = new Date();
-  if (user.lastResetDate.toDateString() !== today.toDateString()) {
-    await users.updateOne({ userId }, { $set: { dailyRequests: 1, lastResetDate: today } });
+  const now = new Date();
+  const resetTime = new Date(user.lastResetDate.getTime() + 24 * 60 * 60 * 1000); // lastResetDate + 24 часа
+  
+  if (now >= resetTime) {
+    // Прошло 24 часа с момента последнего сброса
+    await users.updateOne(
+      { userId }, 
+      { 
+        $set: { 
+          dailyRequests: 1, 
+          lastResetDate: now 
+        } 
+      }
+    );
     return true;
   }
   
@@ -299,7 +322,9 @@ async function createPayment(paymentData: any): Promise<Payment> {
   return payment;
 }
 
-bot.command('start', (ctx) => {
+bot.command('start', async (ctx) => {
+  const username = ctx.from.username;
+  await getUserProfile(ctx.from.id, username);
   const welcomeMessage = `
 Добро пожаловать в AI бота!
 
@@ -322,8 +347,9 @@ bot.command('start', (ctx) => {
 
 bot.command('profile', async (ctx) => {
   const userId = ctx.from.id;
+  const username = ctx.from.username;
   await checkAndUpdateSubscriptionStatus(userId, ctx);
-  const user = await getUserProfile(userId);
+  const user = await getUserProfile(userId, username);
   const nextReset = new Date(user.lastResetDate);
   nextReset.setDate(nextReset.getDate() + 1);
   
@@ -337,6 +363,7 @@ bot.command('profile', async (ctx) => {
   const profileMessage = `
 Это ваш профиль (/profile).
 ID: ${userId}
+Username: ${user.username || 'не указан'}
 ${subscriptionInfo}
 
 Лимиты
@@ -414,6 +441,7 @@ bot.command('cancel_subscription', async (ctx) => {
 
 bot.on(message('text'), async (ctx) => {
   const userId = ctx.from.id;
+  const username = ctx.from.username;
   const userMessage = ctx.message.text;
   console.log('Received message:', userMessage);
 
@@ -421,7 +449,7 @@ bot.on(message('text'), async (ctx) => {
     await checkAndUpdateSubscriptionStatus(userId, ctx);
     const canMakeRequest = await updateUserRequests(userId);
     if (!canMakeRequest) {
-      const user = await getUserProfile(userId);
+      const user = await getUserProfile(userId, username);
       if (user.subscription === 'free') {
         await ctx.reply('Вы достигли дневного лимита бесплатных запросов. Хотите купить премиум подписку?', 
           Markup.inlineKeyboard([Markup.button.callback('Купить премиум', 'buy_premium')]));
