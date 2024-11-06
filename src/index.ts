@@ -56,7 +56,8 @@ const ENVIRONMENT = process.env.NODE_ENV || '';
 const bot = new Telegraf(BOT_TOKEN);
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENROUTER_API_KEY,
+  baseURL: 'https://openrouter.ai/api/v1',
   defaultHeaders: {
     'X-Title': 'Telegram GPT Bot'
   }
@@ -735,3 +736,4 @@ async function processFileContent(fileUrl: string, fileName: string): Promise<st
     throw new Error('Failed to process file content');
   }
 }
+
