@@ -58,7 +58,7 @@ const MAX_CONTEXT_MESSAGES = 8;
 const STREAM_CHUNK_SIZE = 100;
 const FREE_DAILY_LIMIT = 10;
 const PREMIUM_DAILY_LIMIT = 100;
-const PREMIUM_PRICE = 500; // Цена премиум подписки в рублях
+const PREMIUM_PRICE = 1; // Цена премиум подписки в звездах
 
 async function getChatHistory(userId: number): Promise<Array<{ role: 'system' | 'user' | 'assistant', content: string }>> {
   const chats = db.collection('chats');
@@ -332,7 +332,7 @@ bot.command('start', async (ctx) => {
 1. Бесплатный: ${FREE_DAILY_LIMIT} генераций в день
 2. Премиум: ${PREMIUM_DAILY_LIMIT} генераций в день
 
-Цена премиум подписки: ${PREMIUM_PRICE} руб/месяц
+Цена премиум подписки: ${PREMIUM_PRICE} ⭐
 
 Используйте команду /pay для покупки премиум пописки.
   `;
@@ -387,7 +387,7 @@ bot.command('pay', async (ctx) => {
       currency: 'XTR',
       prices: [{ 
         label: 'Премиум подписка', 
-        amount: 1
+        amount: PREMIUM_PRICE
       }],
     });
   } catch (error) {
@@ -541,7 +541,7 @@ bot.action('buy_premium', async (ctx) => {
       currency: 'XTR',
       prices: [{ 
         label: 'Премиум подписка', 
-        amount: 1
+        amount: PREMIUM_PRICE
       }],
     });
   } catch (error) {
