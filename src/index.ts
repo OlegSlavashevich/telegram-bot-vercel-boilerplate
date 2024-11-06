@@ -593,63 +593,67 @@ ENVIRONMENT !== 'production' && development(bot);
 
 // Добавляем обработчик для документов и фото
 bot.on(message('document'), async (ctx) => {
-  const userId = ctx.from.id;
-  const username = ctx.from.username;
-  const user = await getUserProfile(userId, username);
+  console.log('document upload');
+  await ctx.reply('Извините, фича пока не доступна.');
+  return;
 
-  // Ранняя проверка на премиум подписку
-  if (user.subscription !== 'premium') {
-    await ctx.reply(
-      'Анализ файлов доступен только для премиум пользователей.\n' +
-      'Хотите получить доступ к этой функции?',
-      Markup.inlineKeyboard([
-        Markup.button.callback('Купить премиум', 'buy_premium')
-      ])
-    );
-    return;
-  }
+  // const userId = ctx.from.id;
+  // const username = ctx.from.username;
+  // const user = await getUserProfile(userId, username);
 
-  const document = ctx.message.document;
+  // // Ранняя проверка на премиум подписку
+  // if (user.subscription !== 'premium') {
+  //   await ctx.reply(
+  //     'Анализ файлов доступен только для премиум пользователей.\n' +
+  //     'Хотите получить доступ к этой функции?',
+  //     Markup.inlineKeyboard([
+  //       Markup.button.callback('Купить премиум', 'buy_premium')
+  //     ])
+  //   );
+  //   return;
+  // }
+
+  // const document = ctx.message.document;
   
-  // Проверка размера файла
-  if (document.file_size && document.file_size > MAX_FILE_SIZE) {
-    await ctx.reply('Извините, но размер файла превышает максимально допустимый (10 МБ).');
-    return;
-  }
+  // // Проверка размера файла
+  // if (document.file_size && document.file_size > MAX_FILE_SIZE) {
+  //   await ctx.reply('Извините, но размер файла превышает максимально допустимый (10 МБ).');
+  //   return;
+  // }
 
-  const caption = ctx.message.caption || '';
+  // const caption = ctx.message.caption || '';
 
-  try {
-    await checkAndUpdateSubscriptionStatus(userId, ctx);
-    const canMakeRequest = await updateUserRequests(userId);
-    if (!canMakeRequest) {
-      await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
-      return;
-    }
+  // try {
+  //   await checkAndUpdateSubscriptionStatus(userId, ctx);
+  //   const canMakeRequest = await updateUserRequests(userId);
+  //   if (!canMakeRequest) {
+  //     await ctx.reply('Вы достигли дневного лимита запросов. Попробуйте снова завтра.');
+  //     return;
+  //   }
 
-    // Получаем информацию о файле
-    const file = await ctx.telegram.getFile(document.file_id);
-    const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
+  //   // Получаем информацию о файле
+  //   const file = await ctx.telegram.getFile(document.file_id);
+  //   const fileUrl = `https://api.telegram.org/file/bot${BOT_TOKEN}/${file.file_path}`;
 
-    // Сохраняем в базу информацию о файле и caption
-    const fileInfo = `[Файл: ${document.file_name} (${document.mime_type})]`;
-    const messageForHistory = caption ? `${caption}` : fileInfo;
-    await saveChatMessage(userId, 'user', messageForHistory);
+  //   // Сохраняем в базу информацию о файле и caption
+  //   const fileInfo = `[Файл: ${document.file_name} (${document.mime_type})]`;
+  //   const messageForHistory = caption ? `${caption}` : fileInfo;
+  //   await saveChatMessage(userId, 'user', messageForHistory);
 
-    // Загружаем и обрабатываем содержимое файла
-    const fileContent = await processFileContent(fileUrl, document.file_name as string);
+  //   // Загружаем и обрабатываем содержимое файла
+  //   const fileContent = await processFileContent(fileUrl, document.file_name as string);
 
-    // Формируем промпт с информацией о файле и его содержимым
-    const prompt = caption 
-      ? `User Prompt: ${caption}\n\nFile Content: ${fileContent}`
-      : `Please analyze this file: ${fileContent}`;
+  //   // Формируем промпт с информацией о файле и его содержимым
+  //   const prompt = caption 
+  //     ? `User Prompt: ${caption}\n\nFile Content: ${fileContent}`
+  //     : `Please analyze this file: ${fileContent}`;
 
-    // Отправляем в модель
-    const response = await sendToOpenRouterStream(userId, prompt, ctx);
-  } catch (error) {
-    console.error('Error processing file:', error);
-    await ctx.reply('Извините, произошла ошибка при обработке вашего файла.');
-  }
+  //   // Отправляем в модель
+  //   const response = await sendToOpenRouterStream(userId, prompt, ctx);
+  // } catch (error) {
+  //   console.error('Error processing file:', error);
+  //   await ctx.reply('Извините, произошла ошибка при обработке вашего файла.');
+  // }
 });
 
 bot.on(message('photo'), async (ctx) => {
